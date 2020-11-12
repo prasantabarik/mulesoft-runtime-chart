@@ -71,21 +71,6 @@ spec:
                 configMapKeyRef:
                   name: {{ include "mulesoft-runtime.name" . }}-config
                   key: mule.environment
-            - name: ELASTICSEARCH_HOST
-              valueFrom:
-                configMapKeyRef:
-                  name: {{ include "mulesoft-runtime.name" . }}-config
-                  key: elasticsearch.host
-            - name: ES_USERNAME
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "filebeat.name" . }}-secret
-                  key: fb.username
-            - name: ES_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "filebeat.name" . }}-secret
-                  key: fb.password
             - name: MAVEN_GROUP_ID
               value: {{ required "Missing maven groupId" .Values.maven.groupId }}
             - name: MAVEN_ARTIFACT_ID
