@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "mulesoft-runtime.fullname" . }}
+  labels:
+    {{- include "mulesoft-runtime.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+    - port: {{ .Values.service.port }}
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "mulesoft-runtime.selectorLabels" . | nindent 4 }}

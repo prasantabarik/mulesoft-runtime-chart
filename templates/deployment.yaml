@@ -1,0 +1,191 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "mulesoft-runtime.fullname" . }}
+  labels:
+    {{- include "mulesoft-runtime.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "mulesoft-runtime.selectorLabels" . | nindent 6 }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 25%
+  template:
+    metadata:
+      labels:
+        {{- include "mulesoft-runtime.selectorLabels" . | nindent 8 }}
+    spec:
+    {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+    {{- end }}
+      serviceAccountName: {{ include "mulesoft-runtime.name" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: {{ .Chart.Name }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.image.repository }}:{{ .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.port }}
+              protocol: TCP
+          env:
+            - name: PROXY_HOST
+              value: {{ .Values.proxy.host }}
+            - name: PROXY_PORT
+              value: {{ .Values.proxy.port }}
+            - name: ANYPOINT_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "mulesoft-runtime.name" . }}-secret
+                  key: anypoint.username
+            - name: ANYPOINT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "mulesoft-runtime.name" . }}-secret
+                  key: anypoint.password
+            - name: ANYPOINT_ORGANIZATION
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "mulesoft-runtime.name" . }}-config
+                  key: anypoint.organisation
+            - name: ANYPOINT_ENVIRONMENT
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "mulesoft-runtime.name" . }}-config
+                  key: anypoint.environment
+            - name: MULE_SECURE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "mulesoft-runtime.name" . }}-secret
+                  key: mule.secure.key
+            - name: MULE_ENV
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "mulesoft-runtime.name" . }}-config
+                  key: mule.environment
+            - name: ELASTICSEARCH_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "mulesoft-runtime.name" . }}-config
+                  key: elasticsearch.host
+            - name: ES_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "filebeat.name" . }}-secret
+                  key: fb.username
+            - name: ES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "filebeat.name" . }}-secret
+                  key: fb.password
+            - name: MAVEN_GROUP_ID
+              value: {{ required "Missing maven groupId" .Values.maven.groupId }}
+            - name: MAVEN_ARTIFACT_ID
+              value: {{ required "Missing maven artifactId" .Values.maven.artifactId }}
+            - name: MAVEN_ARTIFACT_VERSION
+              value: {{ required "Missing maven artifactVersion" .Values.maven.artifactVersion }}
+            - name: MAVEN_REPOSITORY_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "mulesoft-runtime.name" . }}-config
+                  key: nexus.host
+            - name: TZ
+              value: "Europe/Amsterdam"
+            - name: DEPLOYED_ON
+              value: {{  now | date "2006-01-02 15:04:05"  }}
+            - name: JAVA_ADDITIONAL_PARAM
+              value: {{ .Values.java.additionalParam }}
+            - name: ENABLE_FILEBEAT
+              value: {{ .Values.filebeat.enable | quote }}
+            {{- if .Values.dynatrace.enabled }}
+            - name: LD_PRELOAD 
+              value: /opt/dynatrace/oneagent/agent/lib64/liboneagentproc.so
+            {{- end }}
+          livenessProbe:
+            httpGet:
+              {{- range .Values.ingress.hosts }}
+              {{- range .paths }}
+              path: {{ . }}/healthcheck
+              {{- end }}
+              {{- end }}
+              port: {{ .Values.service.port }}
+            initialDelaySeconds: 480
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet:
+              {{- range .Values.ingress.hosts }}
+              {{- range .paths }}
+              path: {{ . }}/healthcheck
+              {{- end }}
+              {{- end }}
+              port: {{ .Values.service.port }}
+            initialDelaySeconds: 120
+            timeoutSeconds: 5
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: application-logs
+              mountPath: /opt/mule/logs 
+            - name: filebeat-data
+              mountPath: /opt/filebeat/data
+           {{- if .Values.dynatrace.enabled }}
+            - name: oneagent
+              mountPath: /opt/dynatrace/oneagent
+           {{- end }}
+      {{- if .Values.dynatrace.enabled }}
+      initContainers:
+        - name: install-oneagent
+          image: alpine:3.8
+          command:
+          - /bin/sh
+          args:
+          - -c
+          - ARCHIVE=$(mktemp) && wget -O $ARCHIVE "$DT_API_URL/v1/deployment/installer/agent/unix/paas/latest?Api-Token=$DT_PAAS_TOKEN&$DT_ONEAGENT_OPTIONS" && unzip -o -d /opt/dynatrace/oneagent $ARCHIVE && rm -f $ARCHIVE
+          env:
+          {{- if or (eq (.Values.dynatrace.environment | lower) "acc") (eq (.Values.dynatrace.environment | lower) "acceptance") }}
+          - name: DT_API_URL
+            value: {{ .Values.dynatrace.acc.url }}
+          - name: DT_PAAS_TOKEN
+            value: {{ .Values.dynatrace.acc.token }}
+          {{- end }}
+          {{- if or (eq (.Values.dynatrace.environment | lower) "prd") (eq (.Values.dynatrace.environment | lower) "prod") (eq (.Values.dynatrace.environment | lower) "production") }}
+          - name: DT_API_URL
+            value: {{ .Values.dynatrace.prd.url }}
+          - name: DT_PAAS_TOKEN
+            value: {{ .Values.dynatrace.prd.token }}
+          {{- end }}
+          - name: DT_ONEAGENT_OPTIONS
+            value: flavor=default&include=all
+          volumeMounts:
+          - mountPath: /opt/dynatrace/oneagent
+            name: oneagent
+      {{- end }}
+      volumes:
+        - name: application-logs
+          emptyDir: {}
+        - name: filebeat-data
+          emptyDir: {}
+        {{- if .Values.dynatrace.enabled }}
+        - name: oneagent
+          emptyDir: {}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+    {{- end }}
+    {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+    {{- end }}
